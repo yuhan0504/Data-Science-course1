@@ -1,0 +1,18 @@
+name: "Yay internet!"
+output_dir: "."
+navbar:
+  title: "Home"
+  right:
+    - text: "About"
+      href: about.html
+    - text: "plotly"
+      href: plotly.html
+    - text: "dashboard"
+      href: dashboard.html
+    - icon: fa-envelope fa-lg
+      href: mailto:<yw4200@cumc.columbia.edu>
+    - icon: fa-github fa-lg
+      href: https://github.com/yuhan0504/
+output:
+  html_document:
+    theme: readable
