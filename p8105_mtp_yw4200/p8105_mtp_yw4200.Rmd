@@ -1,0 +1,225 @@
+---
+title: "p8105_mtp_yw4200"
+author: "yh"
+date: "2023-10-19"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Problem 1 – Data import, cleaning, and quality control
+
+```{r}
+library(readxl)
+library(dplyr)
+
+# import coa dataset and merge different years' sheet together
+coa_data <- data.frame()
+excel_file <- "./local_data/USPS CHANGE OF ADDRESS NYC.xlsx"
+sheet_names <- excel_sheets("./local_data/USPS CHANGE OF ADDRESS NYC.xlsx")
+
+for (sheet_name in c("2018","2019","2020","2021","2022")) {
+  sheet_data <- read_excel("./local_data/USPS CHANGE OF ADDRESS NYC.xlsx", sheet = sheet_name)
+  coa_data <- bind_rows(coa_data, sheet_data)
+}
+
+#import zip dataset
+zip_data <- read.csv("./local_data/Zip Codes.csv")
+
+# clean zip dataset
+zip_clean <- zip_data |>
+  janitor::clean_names() |>
+  rename(borough = county_name,
+         zipcode = zip_code) |>
+  distinct(zipcode, .keep_all = TRUE) |> 
+  mutate(borough = recode(borough, 
+                          "New York" = "Manhattan", 
+                          "Richmond" = "Staten Island",
+                          "Bronx" = "Bronx",
+                          "Queens" = "Queens",
+                          "Kings" = "Brooklyn")) |>
+  arrange(zipcode)
+
+head(zip_clean)
+
+# remove some unnecessary rows and delete the repeated
+zip_necessary <- zip_clean |>
+  select(-state_fips, -county_code, -county_fips, -file_date) |>
+  distinct(zipcode, .keep_all = TRUE)
+
+head(zip_necessary)
+
+# clean coa dataset
+coa_clean <- coa_data |>
+  janitor::clean_names() |>
+  rename(date = month) |>
+  mutate(year = lubridate::year(date),
+         month = lubridate::month(date),
+         net_change = total_perm_in - total_perm_out
+         ) |>
+  select(year,everything()) |>
+  arrange(zipcode)
+
+head(coa_clean)
+
+# merge two dataset
+merge_data <- left_join(coa_clean, zip_necessary,by = "zipcode")
+```
+
+The major steps:
+
+Firstly, to import the sheets from various years into a single dataset, I used bind_rows and a for loop for the `coa_data`. Second, I renamed variables `borough` and `zipcode`, deleted rows with repeated zipcodes, recoded the boroughs' name by using county names and sorted the variables according to `zipcode`. Subsequently, it was noted that the additional data required and the overlap of `zipcode` in the `zip_clean` would result in a growth of merged dataset. I extracted the years from the COA dataset using the `lubridate` function, added new variables using `mutate`, and rearranged the rows and columns using `arrange` and `select`. In the end, I combined the two datasets using `left_join` to achieve `merge_data`.
+
+```{r}
+# ZIP code only in COA dataset
+only_COA = nrow(subset(coa_clean, !(zipcode %in% zip_necessary$zipcode)))
+only_COA
+# ZIP code only in zipcode dataset
+only_zip = nrow(subset(zip_necessary, !(zipcode %in% coa_clean$zipcode)))
+only_zip
+# count variables in merge data
+nrow(merge_data)
+length(unique(merge_data$zipcode))
+length(unique(merge_data$neighborhood))
+```
+
+The resulting dataset:
+
+Only `r only_zip` zipcode appear only in zip dataset but not in coa dataset. No zipcode only appear in coa dataset.`r nrow(merge_data)` total observations exist. `r length(unique(merge_data$zipcode))` unique ZIP codes are included. `r length(unique(merge_data$neighborhood))` unique neighborhoods.
+
+```{r}
+# find most common city in manhattan
+manhattan_cities <- merge_data |>
+  filter(borough == "Manhattan") |>
+  group_by(city) |>
+  summarize(count = n()) |>
+  arrange(desc(count)) |>
+  head(5) 
+
+manhattan_cities |> knitr::kable()
+
+# find most common city in queens
+queens_cities <- merge_data |>
+  filter(borough == "Queens") |>
+  group_by(city) |>
+  summarize(count = n()) |>
+  arrange(desc(count)) |>
+  head(5) 
+
+queens_cities |> knitr::kable()
+```
+Comment: In the original `zip_data`, it doesn't include `borough` Manhattan. The data possibly lost some boroughs.
+
+```{r}
+# count observations of each ZIP codes
+zipcode_n <- merge_data |>
+  group_by(zipcode) |>
+  summarize(count = n()) |>
+  arrange(count)
+
+zipcode_less60 <- left_join(zipcode_n, zip_necessary, by = "zipcode") |> 
+  filter(count < 60)
+
+zipcode_60 <- left_join(zipcode_n, zip_necessary, by = "zipcode") |> 
+  filter(count == 60)
+
+neighna_less60 <- zipcode_less60 |> filter(is.na(neighborhood) == TRUE)
+neighna_60 <- zipcode_60 |> filter(is.na(neighborhood) == TRUE)
+
+# merge the count number with detailed data and divide them two group
+zipcode_missing <- left_join(merge_data,zipcode_n,by = "zipcode") |> 
+  arrange(count) |> 
+  filter(count < 60)
+zipcode_complete <- left_join(merge_data,zipcode_n,by = "zipcode") |> 
+  arrange(count) |> 
+  filter(count >= 60)
+
+head(zipcode_missing,10)
+
+# find those with missing neighborhood in the zipcode missing dataset
+missing_neigh1 <- zipcode_missing |> filter(is.na(neighborhood))
+
+# find those with missing neighborhood in the zipcode complete dataset
+missing_neigh2 <- zipcode_complete |> filter(is.na(neighborhood))
+
+head(missing_neigh1,5)
+head(missing_neigh2,5)
+```
+`r nrow(zipcode_less60)` ZIP codes have fewer than 60 observations. Among them, `r nrow(neighna_less60)` have missing neighborhood. `r nrow(zipcode_60)` ZIP codes have complete 60 observations. Among them, `r nrow(neighna_60)` have missing neighborhood. Corresponding to the `merge_data`, these zip codes are related to `r nrow(zipcode_missing)` observations. Among those observations, `r nrow(missing_neigh1)` of them are also missing `neighborhood` values. Because in the original COA data, some zip codes only have 1-59 months' observations, which means the time period they recorded was incomplete, not from 2019 to 2022, such as `r as.character(head(zipcode_missing$zipcode,5))`. The reason why there are missing neighborhood is that the neighborhood in zip data is not complete. The examples are zip codes: `r as.character(head(missing_neigh1$zipcode,5))`.
+
+## Problem 2 – EDA and Visualization
+
+
+```{r}
+library(tidyr)
+#  table showing the average of net_change in each borough and year
+net_change <- merge_data |> 
+  group_by(year,borough) |> 
+  summarise(avg_netchange = mean(net_change)) |>
+  arrange(borough,year) |>
+  mutate(avg_netchange = round(avg_netchange, 2)) |>
+  pivot_wider(names_from = year, values_from = avg_netchange)
+
+net_change |> knitr::kable()
+```
+Comment on trends:
+
+The average net change values for all five boroughs between 2018 and 2022 are negative. From 2018 to 2020, the average net change value for all five cities decreases significantly and trends more sharply. After 2020, the average net change value for all five boroughs improves considerably but stays negative. 2020 is the year with the lowest netchange for all five boroughs. Richmond has the highest average net change value overall among the five boroughs, while New York has the lowest overall.
+
+```{r}
+library(tidyr)
+#  table showing the five lowest values of net_change
+five_lowest <- merge_data |> 
+ arrange(net_change) |>
+  head(5) |>
+  select(zipcode, neighborhood, year, month, net_change)
+
+five_lowest |> knitr::kable()
+
+#  table showing the five lowest values of net_change
+five_highest <- merge_data |> 
+  filter(year < 2020) |>
+  arrange(desc(net_change)) |>
+  head(5) |>
+  select(zipcode, neighborhood, year, month, net_change)
+
+five_highest |> knitr::kable()
+```
+
+```{r}
+library(ggplot2)
+# making a plot showing neighborhood-level average net_change values
+netchange_data <- merge_data |>
+  group_by(neighborhood,date,borough) |>
+  summarise(avg_netchange = mean(net_change)) |>
+  filter(!is.na(neighborhood))
+
+netchange_plot <- ggplot(netchange_data,aes(x = date, y = avg_netchange, color = borough)) + 
+  geom_line() +
+  labs(
+    x = "Date",
+    y = "Average net change",
+    color = "Borough",
+    title = "Neighborhood-level average net change values"
+  ) + 
+  facet_wrap(~neighborhood, scales = "free")
+
+netchange_plot
+
+ggsave("results/netchange_plot.png", plot = netchange_plot, width = 15, height = 10)
+```
+Comment:
+
+The seasonal fluctuations in average net change for different neighborhoods within the same borough exhibit similar varying trends. In 2020, the majority of neighborhoods show a discernible decrease in their monthly average net change,probably due to the pandemic. Following 2020, the majority of them exhibit signs of recovery, with monthly average net changes increasing beginning in 2020.
+
+Limitations:
+
+First, there is still some missing data regarding neighborhoods and time. Second, it is not possible to calculate the net change change value as a percentage of the total population (a measure of the relative size of the change) because we do not know the current ZIP code level population sizes for each area. Lastly, in order to gather more data, the time segmentation could be more precise.
+
+```{r}
+wordcountaddin::text_stats("p8105_mtp_yw4200.Rmd")
+```
+
+
